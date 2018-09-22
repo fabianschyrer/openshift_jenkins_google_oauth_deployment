@@ -1,0 +1,190 @@
+apiVersion: v1beta3                                                                              
+kind: List                                                                                       
+items:                                                                                           
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      annotations:
+        serviceaccounts.openshift.io/oauth-redirectreference.jenkins: '{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"jenkins"}}'
+      labels:
+        app: jenkins-persistent
+        template: jenkins-persistent-template
+      name: jenkins
+      namespace: %OCP_PROJECT_NAMESPACE%
+
+  - apiVersion: v1
+    kind: PersistentVolumeClaim
+    metadata:
+      annotations:
+        volume.beta.kubernetes.io/storage-class: %VOLUME_STORAGE_CLASS%
+      labels:
+        app: jenkins-persistent
+        template: jenkins-persistent-template
+      name: jenkins
+      namespace: %OCP_PROJECT_NAMESPACE%
+    spec:
+      accessModes:
+        - ReadWriteOnce
+      resources:
+        requests:
+          storage: 1Gi
+  - apiVersion: apps.openshift.io/v1
+    kind: DeploymentConfig
+    metadata:
+      annotations:
+        template.alpha.openshift.io/wait-for-ready: 'true'
+      labels:
+        app: jenkins-persistent
+        template: jenkins-persistent-template
+      name: jenkins
+      namespace: %OCP_PROJECT_NAMESPACE%
+    spec:
+      replicas: 1
+      selector:
+        name: jenkins
+      strategy:
+        activeDeadlineSeconds: 21600
+        recreateParams:
+          timeoutSeconds: 600
+        resources: {}
+        type: Recreate
+      template:
+        metadata:
+          creationTimestamp: null
+          labels:
+            name: jenkins
+        spec:
+          containers:
+            - env:
+                - name: OPENSHIFT_ENABLE_OAUTH
+                  value: 'true'
+                - name: OPENSHIFT_ENABLE_REDIRECT_PROMPT
+                  value: 'true'
+                - name: KUBERNETES_MASTER
+                  value: 'https://kubernetes.default:443'
+                - name: KUBERNETES_TRUST_CERTIFICATES
+                  value: 'true'
+                - name: JENKINS_SERVICE_NAME
+                  value: jenkins
+                - name: JNLP_SERVICE_NAME
+                  value: jenkins-jnlp
+                - name: CHECKOUT_PATH
+                  value: %CHECKOUT_PATH%
+              image: '%JENKINS_IMAGE_REPO%'
+              imagePullPolicy: Always              
+              livenessProbe:
+                failureThreshold: 2
+                httpGet:
+                  path: /login
+                  port: 8080
+                  scheme: HTTP
+                initialDelaySeconds: 420
+                periodSeconds: 360
+                successThreshold: 1
+                timeoutSeconds: 240
+              name: jenkins
+              readinessProbe:
+                failureThreshold: 3
+                httpGet:
+                  path: /login
+                  port: 8080
+                  scheme: HTTP
+                initialDelaySeconds: 3
+                periodSeconds: 10
+                successThreshold: 1
+                timeoutSeconds: 240
+              resources:
+                limits:
+                  memory: 512Mi
+              securityContext:
+                capabilities: {}
+                privileged: false
+              terminationMessagePath: /dev/termination-log
+              terminationMessagePolicy: File
+              volumeMounts:
+                - mountPath: /var/lib/jenkins
+                  name: jenkins-data
+          dnsPolicy: ClusterFirst
+          imagePullSecrets:
+            - name: %IMAGE_PULL_SECRET%
+          restartPolicy: Always
+          schedulerName: default-scheduler
+          securityContext: {}
+          serviceAccount: jenkins
+          serviceAccountName: jenkins
+          terminationGracePeriodSeconds: 30
+          volumes:
+            - name: jenkins-data
+              persistentVolumeClaim:
+                claimName: jenkins
+      test: false
+      triggers:
+        - type: ConfigChange
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      labels:
+        app: jenkins-persistent
+        template: jenkins-persistent-template
+      name: jenkins-jnlp
+      namespace: %OCP_PROJECT_NAMESPACE%
+    spec:
+      ports:
+        - name: agent
+          port: 50000
+          protocol: TCP
+          targetPort: 50000
+      selector:
+        name: jenkins
+      sessionAffinity: None
+      type: ClusterIP
+    status:
+      loadBalancer: {}
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      annotations:
+        service.alpha.openshift.io/dependencies: '[{"name": "jenkins-jnlp", "namespace": "", "kind": "Service"}]'
+        service.openshift.io/infrastructure: 'true'
+      labels:
+        app: jenkins-persistent
+        template: jenkins-persistent-template
+      name: jenkins
+      namespace: %OCP_PROJECT_NAMESPACE%
+    spec:
+      ports:
+        - name: web
+          port: 80
+          protocol: TCP
+          targetPort: 8080
+      selector:
+        name: jenkins
+      sessionAffinity: None
+      type: ClusterIP
+    status:
+      loadBalancer: {}
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      annotations:
+        haproxy.router.openshift.io/timeout: 4m
+        openshift.io/host.generated: 'true'
+        template.openshift.io/expose-uri: 'http://{.spec.host}{.spec.path}'
+      labels:
+        app: jenkins-persistent
+        exposure: general
+        template: jenkins-persistent-template
+      name: jenkins
+      namespace: %OCP_PROJECT_NAMESPACE%
+      selfLink: /apis/route.openshift.io/v1/namespaces/%OCP_PROJECT_NAMESPACE%/routes/jenkins
+    spec:
+      host: jenkins-%OCP_PROJECT_NAMESPACE%.domain.com
+      tls:
+        insecureEdgeTerminationPolicy: Redirect
+        termination: edge
+      to:
+        kind: Service
+        name: jenkins
+        weight: 100
+      wildcardPolicy: None
+

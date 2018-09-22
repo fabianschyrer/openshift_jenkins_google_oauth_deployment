@@ -1,0 +1,1 @@
+oc create -f gcs-push-secret.yaml
